@@ -4,33 +4,25 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List
 
-import numpy as np
 import pandas as pd
-
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from src.forecast_model import fit_and_predict_rolling_mean
+
 
 DAG_ID = "weather_forecast_daily"
-
-
-def _fit_and_predict_rolling_mean(y: pd.Series, horizon: int) -> np.ndarray:
-    """
-    Simple baseline model:
-    Forecast = mean of last 7 observed TEMP_MAX values.
-    """
-    y = y.dropna()
-    if y.empty:
-        return np.array([0.0] * horizon)
-
-    window = min(7, len(y))
-    pred = float(y.tail(window).mean())
-    return np.array([pred] * horizon)
 
 
 def train_predict_and_upsert(**context) -> None:
@@ -41,10 +33,9 @@ def train_predict_and_upsert(**context) -> None:
     Uses SQL transaction + try/except.
     """
     locations = json.loads(Variable.get("weather_locations"))
-    history_days = int(Variable.get("weather_history_days"))          # you set this to 60
-    horizon_days = int(Variable.get("weather_forecast_horizon_days")) # e.g., 7
+    history_days = int(Variable.get("weather_history_days"))  # you set this to 60
+    horizon_days = int(Variable.get("weather_forecast_horizon_days"))  # e.g., 7
 
-    # This matches your DB naming choices
     target_col = Variable.get("weather_target_metric")  # should be "TEMP_MAX"
     model_name = "rolling_mean_7"
 
@@ -53,7 +44,6 @@ def train_predict_and_upsert(**context) -> None:
     cur = conn.cursor()
 
     try:
-        # Stage table for clean MERGE
         cur.execute("""
             CREATE OR REPLACE TEMP TABLE TMP_WEATHER_FORECAST_DAILY (
               LOCATION_NAME STRING,
@@ -73,7 +63,6 @@ def train_predict_and_upsert(**context) -> None:
         for loc in locations:
             loc_name = loc["name"]
 
-            # Pull last N days of actuals
             sql = f"""
                 SELECT DATE, {target_col}
                 FROM WEATHER_RAW_DAILY
@@ -90,9 +79,8 @@ def train_predict_and_upsert(**context) -> None:
             train_start = df["DATE"].min().date() if not df.empty else None
             train_end = df["DATE"].max().date() if not df.empty else None
 
-            preds = _fit_and_predict_rolling_mean(df[target_col], horizon=horizon_days)
+            preds = fit_and_predict_rolling_mean(df[target_col], horizon=horizon_days)
 
-            # Forecast starts the day after the last observed day
             if not df.empty:
                 start_fc_date = df["DATE"].max().date() + timedelta(days=1)
             else:
@@ -110,7 +98,6 @@ def train_predict_and_upsert(**context) -> None:
                     }
                 )
 
-        # Insert forecast rows into temp stage
         insert_tmp = """
             INSERT INTO TMP_WEATHER_FORECAST_DAILY
               (LOCATION_NAME, FORECAST_DATE, PREDICTED_TEMP_MAX, MODEL_NAME, TRAIN_START_DATE, TRAIN_END_DATE)
@@ -120,7 +107,6 @@ def train_predict_and_upsert(**context) -> None:
         if all_rows:
             cur.executemany(insert_tmp, all_rows)
 
-        # MERGE into your forecast table (idempotent)
         merge_sql = """
             MERGE INTO WEATHER_FORECAST_DAILY t
             USING TMP_WEATHER_FORECAST_DAILY s
@@ -150,13 +136,7 @@ def train_predict_and_upsert(**context) -> None:
 
 def rebuild_final_table_union(**context) -> None:
     """
-    Assignment requirement:
-    Forecasting job must UNION:
-      - ETL table (WEATHER_RAW_DAILY)
-      - Forecast table (WEATHER_FORECAST_DAILY)
-    and create the final table WEATHER_FINAL_DAILY.
-
-    Uses SQL transaction + try/except.
+    Forecasting job UNIONs WEATHER_RAW_DAILY and WEATHER_FORECAST_DAILY into WEATHER_FINAL_DAILY.
     """
     hook = SnowflakeHook(snowflake_conn_id="snowflake_default")
     conn = hook.get_conn()
@@ -165,13 +145,11 @@ def rebuild_final_table_union(**context) -> None:
     try:
         cur.execute("BEGIN;")
 
-        # Rebuild final table each run (simple for grading)
         cur.execute("TRUNCATE TABLE WEATHER_FINAL_DAILY;")
 
         union_sql = """
             INSERT INTO WEATHER_FINAL_DAILY
               (location_name, date, temp_max, temp_min, temp_mean, is_forecast, model_name)
-            -- Actuals from ETL
             SELECT
               LOCATION_NAME AS location_name,
               DATE AS date,
@@ -184,7 +162,6 @@ def rebuild_final_table_union(**context) -> None:
 
             UNION ALL
 
-            -- Forecasts from ML table (only temp_max forecast is available)
             SELECT
               LOCATION_NAME AS location_name,
               FORECAST_DATE AS date,

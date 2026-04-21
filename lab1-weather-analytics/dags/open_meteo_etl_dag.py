@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List
-
-import pandas as pd
-import requests
 
 from airflow import DAG
 from airflow.hooks.base import BaseHook
@@ -13,6 +12,13 @@ from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from src.feature_engineering import raw_rows_to_staging_dataframe
+from src.open_meteo_client import fetch_daily_rows
 
 
 DAG_ID = "open_meteo_etl_daily"
@@ -22,10 +28,16 @@ def _get_open_meteo_base_url() -> str:
     """
     Reads the HTTP Airflow Connection:
       Conn Id: open_meteo_api
-      Host: https://api.open-meteo.com
+      Either set Host to the full URL (https://api.open-meteo.com) or
+      Host=api.open-meteo.com with Schema=https.
     """
     conn = BaseHook.get_connection("open_meteo_api")
-    return conn.host.rstrip("/")
+    host = (conn.host or "").strip().rstrip("/")
+    if host.startswith("http://") or host.startswith("https://"):
+        return host
+    schema = (conn.schema or "https").strip().rstrip(":/")
+    host = host.lstrip("/")
+    return f"{schema}://{host}"
 
 
 def fetch_open_meteo_daily(**context) -> List[Dict[str, Any]]:
@@ -36,52 +48,9 @@ def fetch_open_meteo_daily(**context) -> List[Dict[str, Any]]:
     locations = json.loads(Variable.get("weather_locations"))
     history_days = int(Variable.get("weather_history_days"))  # you will set this to 60 in UI
 
-    end_date = datetime.utcnow().date()
-    start_date = end_date - timedelta(days=history_days)
-
     base_url = _get_open_meteo_base_url()
-    endpoint = f"{base_url}/v1/forecast"
+    rows = fetch_daily_rows(base_url, locations, history_days)
 
-    rows: List[Dict[str, Any]] = []
-
-    for loc in locations:
-        params = {
-            "latitude": loc["lat"],
-            "longitude": loc["lon"],
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "daily": [
-                "temperature_2m_max",
-                "temperature_2m_min",
-                "temperature_2m_mean",
-                "precipitation_sum",
-            ],
-            "timezone": "UTC",
-        }
-
-        r = requests.get(endpoint, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-
-        daily = data.get("daily", {})
-        dates = daily.get("time", [])
-
-        # Map Open-Meteo fields -> YOUR Snowflake columns
-        for i, d in enumerate(dates):
-            rows.append(
-                {
-                    "LOCATION_NAME": loc["name"],
-                    "LATITUDE": float(loc["lat"]),
-                    "LONGITUDE": float(loc["lon"]),
-                    "DATE": d,  # your column is DATE (not OBS_DATE)
-                    "TEMP_MAX": daily.get("temperature_2m_max", [None])[i],
-                    "TEMP_MIN": daily.get("temperature_2m_min", [None])[i],
-                    "TEMP_MEAN": daily.get("temperature_2m_mean", [None])[i],
-                    "PRECIP_MM": daily.get("precipitation_sum", [None])[i],
-                }
-            )
-
-    # Save to XCom for the load task
     context["ti"].xcom_push(key="raw_rows", value=rows)
     return rows
 
@@ -97,15 +66,13 @@ def upsert_weather_raw_to_snowflake(**context) -> None:
     if not rows:
         return
 
-    df = pd.DataFrame(rows)
-    df["DATE"] = pd.to_datetime(df["DATE"]).dt.date
+    df = raw_rows_to_staging_dataframe(rows)
 
     hook = SnowflakeHook(snowflake_conn_id="snowflake_default")
     conn = hook.get_conn()
     cur = conn.cursor()
 
     try:
-        # Temp table to stage data (keeps MERGE clean and idempotent)
         cur.execute("""
             CREATE OR REPLACE TEMP TABLE TMP_WEATHER_RAW_DAILY (
               LOCATION_NAME STRING,
@@ -178,7 +145,6 @@ with DAG(
         python_callable=upsert_weather_raw_to_snowflake,
     )
 
-    # Optional: trigger your forecasting DAG after ETL succeeds
     trigger_forecast = TriggerDagRunOperator(
         task_id="trigger_forecast_dag",
         trigger_dag_id="weather_forecast_daily",

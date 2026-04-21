@@ -201,6 +201,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local Airflow (lab1 dev DB / metadata)
+lab1-weather-analytics/.airflow/
+lab1-weather-analytics/.env
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
