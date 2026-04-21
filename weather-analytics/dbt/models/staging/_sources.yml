@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: weather
+    description: "Lab 1 Airflow-loaded weather tables in the active Snowflake database/schema."
+    database: "{{ target.database }}"
+    schema: "{{ target.schema }}"
+    tables:
+      - name: weather_final_daily
+        identifier: WEATHER_FINAL_DAILY
+        description: "Union of actuals and forecasts from Airflow."
+        columns:
+          - name: LOCATION_NAME
+          - name: DATE
+          - name: TEMP_MAX
+          - name: TEMP_MIN
+          - name: TEMP_MEAN
+          - name: IS_FORECAST
+          - name: MODEL_NAME
+      - name: weather_forecast_daily
+        identifier: WEATHER_FORECAST_DAILY
+        description: "Forecast table used for snapshotting."
+        columns:
+          - name: LOCATION_NAME
+          - name: FORECAST_DATE
+          - name: PREDICTED_TEMP_MAX
+          - name: MODEL_NAME
+          - name: CREATED_AT

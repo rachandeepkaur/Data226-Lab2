@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Registers Airflow connection snowflake_default from lab1-weather-analytics/.env
+# Registers Airflow connection snowflake_default from weather-analytics/.env
 set -euo pipefail
 
 LAB_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,6 +30,11 @@ AIRFLOW_BIN="${LAB_ROOT}/.venv/bin/airflow"
 if [[ ! -x "$AIRFLOW_BIN" ]]; then
   AIRFLOW_BIN="$(command -v airflow)"
 fi
+
+# Metadata DB schema must match the installed Airflow (Airflow 3.x adds columns like connection.team_name).
+# If migrate was skipped or the DB came from Airflow 2.x, `connections add` fails with "no such column: ...".
+echo "Running: airflow db migrate (confirm with y if prompted) ..."
+"$AIRFLOW_BIN" db migrate
 
 EXTRA_JSON="$(
   python3 <<'PY'

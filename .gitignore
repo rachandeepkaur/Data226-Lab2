@@ -201,9 +201,14 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Local Airflow (lab1 dev DB / metadata)
-lab1-weather-analytics/.airflow/
-lab1-weather-analytics/.env
+# Unified weather project (local Airflow + secrets + dbt artifacts)
+weather-analytics/.airflow/
+weather-analytics/.env
+weather-analytics/.venv/
+weather-analytics/dbt/target/
+weather-analytics/dbt/dbt_packages/
+weather-analytics/dbt/logs/
+weather-analytics/dbt/.user.yml
 
 # Marimo
 marimo/_static/

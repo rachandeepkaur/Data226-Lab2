@@ -1,0 +1,17 @@
+# No secrets here — values come from env (Airflow maps snowflake_default into these).
+# Safe to commit. For local CLI: export SNOWFLAKE_* or use lab1 .env + `set -a; source ../lab1-weather-analytics/.env`.
+
+weather_elt:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'PUBLIC') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA') }}"
+      threads: 4
+      client_session_keep_alive: false

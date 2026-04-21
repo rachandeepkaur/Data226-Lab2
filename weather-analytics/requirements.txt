@@ -1,0 +1,13 @@
+# Install into the same Python environment as Airflow (scheduler + workers).
+# Use Apache's constraints file for your Python version when pinning Airflow.
+
+apache-airflow>=2.8.0
+apache-airflow-providers-snowflake>=5.0.0
+
+# Lab 2 — dbt must be on PATH for dbt_weather_elt_daily tasks
+dbt-core>=1.7.0
+dbt-snowflake>=1.7.0
+
+pandas>=2.0.0
+requests>=2.31.0
+numpy>=1.24.0

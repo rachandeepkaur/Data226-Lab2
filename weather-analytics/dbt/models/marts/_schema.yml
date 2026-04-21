@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: mart_weather_daily_analytics
+    description: "Daily weather with 7-day moving average and day-over-day % change in max temperature."
+    columns:
+      - name: location_name
+        description: "City / station label from Lab 1."
+        tests:
+          - not_null
+      - name: observation_date
+        tests:
+          - not_null
+      - name: is_forecast
+        tests:
+          - not_null
+      - name: temp_max
+        tests:
+          - not_null
+      - name: temp_max_7d_moving_avg
+        description: "Trailing 7-row mean of temp_max (per location and actual/forecast flag)."
+      - name: temp_max_pct_change_vs_prior_day
+        description: "Percent change vs previous calendar row for the same location and forecast flag."
