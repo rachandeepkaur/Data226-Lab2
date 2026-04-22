@@ -47,8 +47,10 @@ keys = {
 extra = {k: os.environ[v] for k, v in keys.items() if os.environ.get(v)}
 if os.environ.get("SNOWFLAKE_REGION"):
     extra["region"] = os.environ["SNOWFLAKE_REGION"]
-if os.environ.get("SNOWFLAKE_ROLE"):
-    extra["role"] = os.environ["SNOWFLAKE_ROLE"]
+# Default role = explicit SNOWFLAKE_ROLE, else Snowflake user (class accounts often grant DB to that role).
+role = (os.environ.get("SNOWFLAKE_ROLE") or os.environ.get("SNOWFLAKE_USER") or "").strip()
+if role:
+    extra["role"] = role
 print(json.dumps(extra))
 PY
 )"

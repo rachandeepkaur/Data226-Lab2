@@ -58,8 +58,9 @@ def fetch_open_meteo_daily(**context) -> List[Dict[str, Any]]:
 def upsert_weather_raw_to_snowflake(**context) -> None:
     """
     Loads fetched rows into Snowflake:
-      - inserts into temp table
-      - MERGE into WEATHER_RAW_DAILY
+      - stage rows in a temp table
+      - in one transaction: DELETE matching keys, then INSERT (idempotent; same idea as
+        DELETE FROM raw WHERE date = %s, then INSERT, per run date / batch)
     Uses SQL transaction + try/except with rollback.
     """
     rows = context["ti"].xcom_pull(key="raw_rows", task_ids="fetch_open_meteo_daily")
@@ -97,30 +98,35 @@ def upsert_weather_raw_to_snowflake(**context) -> None:
         """
         cur.executemany(insert_sql, df.to_dict("records"))
 
-        merge_sql = """
-            MERGE INTO WEATHER_RAW_DAILY t
+        delete_sql = """
+            DELETE FROM WEATHER_RAW_DAILY t
             USING TMP_WEATHER_RAW_DAILY s
-              ON t.LOCATION_NAME = s.LOCATION_NAME
-             AND t.DATE = s.DATE
-            WHEN MATCHED THEN UPDATE SET
-              t.LATITUDE = s.LATITUDE,
-              t.LONGITUDE = s.LONGITUDE,
-              t.TEMP_MAX = s.TEMP_MAX,
-              t.TEMP_MIN = s.TEMP_MIN,
-              t.TEMP_MEAN = s.TEMP_MEAN,
-              t.PRECIP_MM = s.PRECIP_MM,
-              t.INGESTED_AT = CURRENT_TIMESTAMP()
-            WHEN NOT MATCHED THEN INSERT
-              (LOCATION_NAME, LATITUDE, LONGITUDE, DATE, TEMP_MAX, TEMP_MIN, TEMP_MEAN, PRECIP_MM)
-            VALUES
-              (s.LOCATION_NAME, s.LATITUDE, s.LONGITUDE, s.DATE, s.TEMP_MAX, s.TEMP_MIN, s.TEMP_MEAN, s.PRECIP_MM);
+            WHERE t.LOCATION_NAME = s.LOCATION_NAME
+              AND t.DATE = s.DATE;
         """
-        cur.execute(merge_sql)
+        cur.execute(delete_sql)
+
+        insert_target_sql = """
+            INSERT INTO WEATHER_RAW_DAILY
+              (LOCATION_NAME, LATITUDE, LONGITUDE, DATE, TEMP_MAX, TEMP_MIN, TEMP_MEAN, PRECIP_MM, INGESTED_AT)
+            SELECT
+              s.LOCATION_NAME,
+              s.LATITUDE,
+              s.LONGITUDE,
+              s.DATE,
+              s.TEMP_MAX,
+              s.TEMP_MIN,
+              s.TEMP_MEAN,
+              s.PRECIP_MM,
+              CURRENT_TIMESTAMP()
+            FROM TMP_WEATHER_RAW_DAILY s;
+        """
+        cur.execute(insert_target_sql)
         cur.execute("COMMIT;")
 
-    except Exception:
+    except Exception as e:
         cur.execute("ROLLBACK;")
-        raise
+        raise e
     finally:
         cur.close()
         conn.close()

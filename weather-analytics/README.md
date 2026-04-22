@@ -80,7 +80,16 @@ Airflow **3.x** no longer has `airflow webserver`. Use one of these:
 
 ### Option A — `standalone` (simplest for class / local dev)
 
-From `weather-analytics/` with your venv activated:
+**Important:** The DAGs must live in **`weather-analytics/dags/`**, not under **`$AIRFLOW_HOME/dags`**. If `airflow.cfg` has the wrong `dags_folder`, the UI may show **only one DAG** (or none). Check **`$AIRFLOW_HOME/airflow.cfg`** → `[core]` → `dags_folder` = **absolute path to `…/weather-analytics/dags`**.
+
+Easiest start (sets env vars for you):
+
+```bash
+chmod +x scripts/start_standalone.sh
+./scripts/start_standalone.sh
+```
+
+Or manually from `weather-analytics/` with your venv activated:
 
 ```bash
 export AIRFLOW_HOME="$(pwd)/.airflow"
@@ -112,12 +121,35 @@ You still need a valid auth setup (e.g. admin user created by `standalone` once,
 
 ## Local CLI quick test
 
+**Use this project’s venv**, not a global Conda/Homebrew `airflow` (different Airflow/Python versions → broken or empty metadata DB):
+
+```bash
+cd weather-analytics
+source .venv/bin/activate
+which airflow   # should show .../weather-analytics/.venv/bin/airflow
+```
+
 ```bash
 export AIRFLOW_HOME="$(pwd)/.airflow"
 export AIRFLOW__CORE__DAGS_FOLDER="$(pwd)/dags"
 export AIRFLOW__CORE__LOAD_EXAMPLES="False"
 export PYTHONPATH="$(pwd)"
+```
+
+If you see **`no such table: serialized_dag`** (or similar), the SQLite DB under **`AIRFLOW_HOME`** was never fully initialized—often because **`airflow db migrate`** asked *“Please confirm database initialize”* and the prompt was **skipped** (waiting instead of typing **`y`**).
+
+**Fix:**
+
+```bash
 airflow db migrate
+```
+
+Type **`y`** when asked. If errors persist:
+
+```bash
+rm -f .airflow/airflow.db
+airflow db migrate   # answer y
+./scripts/load_snowflake_connection.sh   # re-add connection; re-create Variables in UI if needed
 airflow dags reserialize
 airflow dags list
 ```
@@ -162,9 +194,10 @@ The script now runs **`airflow db migrate`** before `connections add` so the sch
 
 ### UI shows only one DAG (e.g. only `dbt_weather_elt_daily`)
 
-In **Airflow 3.x**, DAGs can be marked **`is_stale`** in the metadata DB until the DAG processor finishes parsing or you refresh serialization. The web UI often **hides stale DAGs**, so you may see fewer DAGs than `airflow dags list`.
+1. **Wrong `dags_folder` in `airflow.cfg`** (very common after `standalone` / first init):  
+   `[core] dags_folder` must be **`…/weather-analytics/dags`**, not **`…/weather-analytics/.airflow/dags`**. The second path often does not exist or only has a subset of files. Edit **`$AIRFLOW_HOME/airflow.cfg`** or always start with **`./scripts/start_standalone.sh`** (or export `AIRFLOW__CORE__DAGS_FOLDER` before `airflow standalone`).
 
-**Fix (safe, run from `weather-analytics/` with venv + env vars set):**
+2. **`is_stale` in the metadata DB:** The UI may hide stale DAGs. After fixing `dags_folder`, run:
 
 ```bash
 export AIRFLOW_HOME="$(pwd)/.airflow"
@@ -173,6 +206,27 @@ export PYTHONPATH="$(pwd)"
 airflow dags reserialize
 ```
 
-Then **reload the browser** (hard refresh). You should see all DAG files under `dags/` (e.g. three: ETL, forecast, dbt).
+Then **restart** `standalone` and **hard-refresh** the browser.
 
-Also confirm **`airflow dags list`** shows the same count; if it does but the UI does not, the issue is almost always stale flags or a UI filter—check any **stale / active** toggles in the DAG list.
+Also confirm **`airflow dags list`** shows three DAGs; check the UI for any **stale / bundle** filters.
+
+### `dbt_run` fails: `Database error while listing schemas in database "..."` / `002043` / `Object does not exist`
+
+dbt uses the **`database`** value from the **`snowflake_default`** connection extra (set via `.env` → `load_snowflake_connection.sh`). That database must:
+
+1. **Exist** in your Snowflake account (name must match exactly, including case where relevant).
+2. Be **usable** by your role (`USAGE` on the database; `USAGE` on the schema).
+3. Be the **same database** where Lab 1 created `WEATHER_FINAL_DAILY` / `WEATHER_FORECAST_DAILY` (dbt `sources` read those tables).
+
+In Snowflake (worksheet), verify:
+
+```sql
+SHOW DATABASES;
+-- USE DATABASE <name_from_SNOWFLAKE_DATABASE_in_.env>;
+SHOW SCHEMAS;
+SHOW TABLES LIKE 'WEATHER%';
+```
+
+If your tables live in e.g. `ANALYTICS.PUBLIC` but `.env` has `SNOWFLAKE_DATABASE=USER_DB_CATFISH`, update **`SNOWFLAKE_DATABASE`** to the real database name, then run **`./scripts/load_snowflake_connection.sh`** again and retry the DAG.
+
+**Role / `002043` while “listing schemas”:** The UI uses your **default role** (often the same as your username, e.g. `CATFISH`). If Airflow/dbt connected with role **`PUBLIC`**, Snowflake may reject `SHOW SCHEMAS` / metadata calls on `USER_DB_*` even though the database exists. Fix: set **`SNOWFLAKE_ROLE`** in `.env` to the role shown in the Snowflake worksheet (e.g. `CATFISH`), or re-run **`./scripts/load_snowflake_connection.sh`** — it now defaults **`role`** in the connection extra to **`SNOWFLAKE_USER`** when `SNOWFLAKE_ROLE` is not set. Then restart the DAG / re-run **`dbt debug`** from `dbt/` with the same env.

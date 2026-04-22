@@ -13,6 +13,7 @@ import pandas as pd
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -202,4 +203,10 @@ with DAG(
         python_callable=rebuild_final_table_union,
     )
 
-    t1 >> t2
+    trigger_dbt = TriggerDagRunOperator(
+        task_id="trigger_dbt_weather_elt",
+        trigger_dag_id="dbt_weather_elt_daily",
+        wait_for_completion=False,
+    )
+
+    t1 >> t2 >> trigger_dbt

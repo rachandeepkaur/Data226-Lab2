@@ -26,7 +26,13 @@ def _snowflake_env_from_airflow() -> dict[str, str]:
     account = (extra.get("account") or "").strip()
     warehouse = (extra.get("warehouse") or "").strip()
     database = (extra.get("database") or "").strip()
-    role = (extra.get("role") or "").strip() or "PUBLIC"
+    # Snowflake: role PUBLIC rarely has USAGE on USER_DB_* databases. If Airflow extra has no role,
+    # use the login name (typical default role on trial / class accounts) before falling back to PUBLIC.
+    role = (extra.get("role") or "").strip()
+    if not role:
+        role = (conn.login or "").strip()
+    if not role:
+        role = "PUBLIC"
     schema = (conn.schema or "").strip()
     if not schema:
         raise ValueError("snowflake_default connection must set Schema (Snowflake schema for dbt + sources).")
